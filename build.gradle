@@ -1,0 +1,42 @@
+plugins {
+    id 'java'
+    id 'org.jetbrains.kotlin.jvm' version '1.5.21'
+}
+
+group 'app.gaborbiro'
+version '1.0'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.5.21'
+}
+
+task allJars {
+    dependsOn('makeJar')
+}
+
+tasks.register('makeJar', CustomJar, project)
+
+class CustomJar extends org.gradle.jvm.tasks.Jar {
+
+    @javax.inject.Inject
+    CustomJar(Project project) {
+        manifest {
+            attributes(
+                    "Main-Class": "app.gaborbiro.daysabroad.MainKt",
+            )
+        }
+        archiveFileName.set("DaysAbroad.jar")
+
+        from {} with project.jar
+
+        destinationDirectory = project.file(project.rootDir)
+    }
+}
+
+jar {
+    from { configurations.compileClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+}

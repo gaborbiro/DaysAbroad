@@ -1,9 +1,13 @@
+package app.gaborbiro.daysabroad
+
 import java.io.BufferedReader
 import java.io.FileReader
+import java.io.InputStreamReader
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.TimeUnit
 import kotlin.math.acos
 import kotlin.math.cos
@@ -17,56 +21,56 @@ fun main(args: Array<String>) {
 class Main {
 
     fun main(args: Array<String>) {
-        args.getArg("-s")?.let {
-            calculateDaysOutside(it, args)
-        } ?: run {
-            println("Options:")
-            println("-s <file path>: Required. Days spent outside of UK. File path must point to google location history takeout file in json format. (See https://takeout.google.com/settings/takeout)")
-            println("-t <int>: Optional (default: 5 years or 1825 days). Number of days in the past to analyse")
-            println("-l <float>,<float>: Optional (default: $DEFAULT_LON_CENTRE,$DEFAULT_LAT_CENTRE). Centroid, with a radius of $DEFAULT_THRESHOLD_KM km")
-            println("-r <int>: Optional (default: $DEFAULT_THRESHOLD_KM km)")
-            println("-d: Print debug information")
+        BufferedReader(InputStreamReader(System.`in`)).use { reader ->
+            args.getArg("-s")?.let {
+                calculateDaysAbroad(it, args)
+            } ?: run {
+                calculateDaysAbroad("Location History.json", args)
+            }
+            println()
+            println("Press enter to exit")
+            reader.readLine()
         }
     }
 
-    private fun calculateDaysOutside(filePath: String, args: Array<String>) {
+    private fun calculateDaysAbroad(filePath: String, args: Array<String>) {
         args.getArg("-t")?.let {
-            calculateDaysOutside(filePath, it.toLong(), args)
+            calculateDaysAbroad(filePath, it.toInt(), args)
         } ?: run {
-            calculateDaysOutside(filePath, DEFAULT_PERIOD_DAYS, args)
+            calculateDaysAbroad(filePath, DEFAULT_PERIOD_YEARS, args)
         }
     }
 
-    private fun calculateDaysOutside(filePath: String, days: Long, args: Array<String>) {
+    private fun calculateDaysAbroad(filePath: String, years: Int, args: Array<String>) {
         args.getArg("-l")?.let {
             val latLon = it.split(",")
             if (latLon.size == 2) {
                 val longitude = latLon[0].toDouble()
                 val latitude = latLon[1].toDouble()
-                calculateDaysOutside(filePath, days, longitude, latitude, args)
+                calculateDaysAbroad(filePath, years, longitude, latitude, args)
             }
         } ?: run {
-            calculateDaysOutside(filePath, days, DEFAULT_LON_CENTRE, DEFAULT_LAT_CENTRE, args)
+            calculateDaysAbroad(filePath, years, DEFAULT_LON_CENTRE, DEFAULT_LAT_CENTRE, args)
         }
     }
 
-    private fun calculateDaysOutside(
+    private fun calculateDaysAbroad(
         filePath: String,
-        days: Long,
+        years: Int,
         centerLongitude: Double,
         centerLatitude: Double,
         args: Array<String>
     ) {
         args.getArg("-r")?.let {
-            calculateDaysOutside(filePath, days, centerLongitude, centerLatitude, it.toInt(), args)
+            calculateDaysAbroad(filePath, years, centerLongitude, centerLatitude, it.toInt(), args)
         } ?: run {
-            calculateDaysOutside(filePath, days, centerLongitude, centerLatitude, DEFAULT_THRESHOLD_KM, args)
+            calculateDaysAbroad(filePath, years, centerLongitude, centerLatitude, DEFAULT_THRESHOLD_KM, args)
         }
     }
 
-    private fun calculateDaysOutside(
+    private fun calculateDaysAbroad(
         filePath: String,
-        days: Long,
+        years: Int,
         centerLongitude: Double,
         centerLatitude: Double,
         radius: Int,
@@ -82,11 +86,15 @@ class Main {
         var distance: Double
         var accuracy: Long? = null
 
-        val since: OffsetDateTime = Instant.now().atOffset(ZoneOffset.UTC).minusDays(days - 1)
-        val sinceMillis = since.toInstant().toEpochMilli()
+        val start: OffsetDateTime = Instant.now().atOffset(ZoneOffset.UTC)
+            .minusYears(years.toLong())
+            .plusDays(1)
+            .truncatedTo(ChronoUnit.DAYS)
+        val sinceMillis = start.toInstant().toEpochMilli()
         val dayMap: MutableMap<Int, Day> = mutableMapOf()
 
-        println("Processing '$filePath'...")
+        println("Processing '${System.getProperty("user.dir")}${System.getProperty("file.separator")}$filePath'...")
+        println()
         val reader = BufferedReader(FileReader(filePath))
         reader.readLine()
         reader.readLine()
@@ -143,14 +151,29 @@ class Main {
             }
         }
 
-        val daysOutside = dayMap.count { it.value.run { inside == null || inside!! < 10 } }
-        val lastDate: OffsetDateTime = Instant.ofEpochMilli(lastTimestamp!!).atOffset(ZoneOffset.UTC)
-        val formatter = DateTimeFormatter.ofPattern("YYYY/MMM/d HH:mm a")
-        val sinceFormatted = formatter.format(since)
-        val untilFormatted = formatter.format(lastDate)
+        val daysNotInside = dayMap.count { it.value.status() in arrayOf(DayStatus.OUTSIDE, DayStatus.TRANSIT) }
+        val end: OffsetDateTime = Instant.ofEpochMilli(lastTimestamp!!).atOffset(ZoneOffset.UTC)
+        val dateTimeFormatter = DateTimeFormatter.ofPattern("YYYY/MMM/d HH:mm a")
+        val dateFormatter = DateTimeFormatter.ofPattern("YYYY/MMM/d")
+        val sinceFormatted = dateTimeFormatter.format(start)
+        val untilFormatted = dateTimeFormatter.format(end)
         println("Between $sinceFormatted and $untilFormatted (last timestamp in the file)")
-        println("Number of days spent entirely outside: $daysOutside")
-        println("Number of days that have valid coordinates: ${dayMap.size}. Missing ${days - dayMap.size} days.")
+        println("Number of days spent outside (including transit days): $daysNotInside")
+        val onTheDayIndex = TimeUnit.MILLISECONDS.toDays(start.toEpochSecond() * 1000).toInt()
+        val onTheDayResult = dayMap[onTheDayIndex]
+        println(
+            "$years years ago (${dateFormatter.format(start.toLocalDate())}) you were: " +
+                    "${onTheDayResult?.status() ?: run { "Unknown" }}"
+        )
+        val (valid, invalid) = dayMap.values.partition { it.status() != DayStatus.NOT_ENOUGH_INFO }
+        val days = ChronoUnit.DAYS.between(start, end) + 1
+        println()
+        println("Quality of data:")
+        println(
+            "${valid.filter { it.status() != DayStatus.NOT_ENOUGH_INFO }.size} days have valid coordinates" +
+                    "\n${days - dayMap.size} days have no information" +
+                    "\n${invalid.size} days do not have enough gps hits"
+        )
     }
 }
 
@@ -158,7 +181,7 @@ class Main {
 private const val DEFAULT_LON_CENTRE = 54.0085726
 private const val DEFAULT_LAT_CENTRE = -1.4301757
 private const val DEFAULT_THRESHOLD_KM = 381
-private const val DEFAULT_PERIOD_DAYS = 5 * 365L
+private const val DEFAULT_PERIOD_YEARS = 5
 
 fun convertLongitude(value: Long) = (if (value > 1800000000) value - 4294967296 else value) / 10.0.pow(7.0)
 fun convertLatitude(value: Long) = (if (value > 900000000) value - 4294967296 else value) / 10.0.pow(7.0)
@@ -190,11 +213,28 @@ fun Array<Long?>.runOrNull(runnable: (Array<Long>) -> Unit): Unit? {
 private fun Double.deg2rad() = this * Math.PI / 180.0
 private fun Double.rad2deg() = this * 180.0 / Math.PI
 
-class Day(var outside: Int? = null, var inside: Int? = null
+class Day(
+    var outside: Int? = null, var inside: Int? = null
 ) {
     override fun toString(): String {
         return "Day(outside=$outside, inside=$inside)"
     }
+
+    fun status(): DayStatus {
+        return if (inside != null && inside!! > 9 && outside != null && outside!! > 9) {
+            DayStatus.TRANSIT
+        } else if (inside != null && inside!! > 9) {
+            DayStatus.INSIDE
+        } else if (outside != null && outside!! > 9) {
+            DayStatus.OUTSIDE
+        } else {
+            DayStatus.NOT_ENOUGH_INFO
+        }
+    }
+}
+
+enum class DayStatus {
+    INSIDE, OUTSIDE, TRANSIT, NOT_ENOUGH_INFO
 }
 
 class LonLat(
@@ -206,8 +246,6 @@ private const val KEY_TIMESTAMP = "timestampMs"
 private const val KEY_LATITUDE = "latitudeE7"
 private const val KEY_LONGITUDE = "longitudeE7"
 private const val KEY_ACCURACY = "accuracy"
-
-fun Array<String>.verify(name: String) = contains(name)
 
 fun Array<String>.getArg(name: String): String? {
     return if (contains(name)) {
