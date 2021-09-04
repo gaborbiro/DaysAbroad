@@ -22,7 +22,7 @@ class Main {
         } ?: run {
             println("Options:")
             println("-s <file path>: Required. Days spent outside of UK. File path must point to google location history takeout file in json format. (See https://takeout.google.com/settings/takeout)")
-            println("-t <int>: Optional (default: 5 years). Number of days in the past to analyse")
+            println("-t <int>: Optional (default: 5 years or 1825 days). Number of days in the past to analyse")
             println("-l <float>,<float>: Optional (default: $DEFAULT_LON_CENTRE,$DEFAULT_LAT_CENTRE). Centroid, with a radius of $DEFAULT_THRESHOLD_KM km")
             println("-r <int>: Optional (default: $DEFAULT_THRESHOLD_KM km)")
             println("-d: Print debug information")
@@ -148,9 +148,9 @@ class Main {
         val formatter = DateTimeFormatter.ofPattern("YYYY/MMM/d HH:mm a")
         val sinceFormatted = formatter.format(since)
         val untilFormatted = formatter.format(lastDate)
-        println("Between $sinceFormatted and $untilFormatted")
-        println("Number of days spent entirely outside are $daysOutside")
-        println("Number of days that had valid coordinates: ${dayMap.size}. Missing ${days - dayMap.size} days.")
+        println("Between $sinceFormatted and $untilFormatted (last timestamp in the file)")
+        println("Number of days spent entirely outside: $daysOutside")
+        println("Number of days that have valid coordinates: ${dayMap.size}. Missing ${days - dayMap.size} days.")
     }
 }
 
