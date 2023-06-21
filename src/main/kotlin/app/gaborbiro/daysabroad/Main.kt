@@ -2,8 +2,11 @@ package app.gaborbiro.daysabroad
 
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 
@@ -30,31 +33,16 @@ class Main {
         val filePath = args.getArg("-f")
 
         filePath?.let {
-            val start: ZonedDateTime = ZonedDateTime.of(
-                2022,
-                4,
-                6,
-                0,
-                0,
-                0,
-                0,
-                ZoneOffset.UTC
-            ).truncatedTo(ChronoUnit.DAYS)
-            val end: ZonedDateTime = ZonedDateTime.of(
-                2023,
-                4,
-                6,
-                0,
-                0,
-                0,
-                0,
-                ZoneOffset.UTC
-            ).truncatedTo(ChronoUnit.DAYS)
-
-            checkCenterPoint(args, filePath, start, end)
+            checkDates(args, filePath)
         } ?: run {
             println("No input file (-f) specified")
         }
+    }
+
+    private fun checkDates(args: Array<String>, filePath: String) {
+        val start = parseConsoleDate(args.getArg("-s"))
+        val end = parseConsoleDate(args.getArg("-e"))
+        checkCenterPoint(args, filePath, start, end)
     }
 
     private fun checkCenterPoint(

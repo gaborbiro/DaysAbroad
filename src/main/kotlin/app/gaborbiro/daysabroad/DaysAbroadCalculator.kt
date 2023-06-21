@@ -4,8 +4,10 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.temporal.ChronoUnit
+import kotlin.math.roundToInt
 
 class DaysAbroadCalculator(private val recordsParser: RecordsParser) {
+
     fun countDaysAbroad(
         filePath: String,
         start: ZonedDateTime? = null,
@@ -16,9 +18,9 @@ class DaysAbroadCalculator(private val recordsParser: RecordsParser) {
         verbose: Boolean = false,
         generateURLsForTransitions: Boolean = false,
     ) {
-        val state = State()
+        val result = Result()
 
-        println("Processing ${System.getProperty("user.dir")}${System.getProperty("file.separator")}$filePath")
+        println("\nProcessing ${System.getProperty("user.dir")}${System.getProperty("file.separator")}$filePath")
 
         val start = start ?: DEFAULT_START
         val end = end ?: ZonedDateTime.now()
@@ -26,11 +28,19 @@ class DaysAbroadCalculator(private val recordsParser: RecordsParser) {
         val startFormatted = dateTimeFormatter.format(start)
         val endFormatted = dateTimeFormatter.format(end)
         println("Target range: $startFormatted - $endFormatted")
-
-        recordsParser.parse(filePath, verbose) { record ->
+        val c = CharArray(23) { ' ' }
+        c[0] = '\r'
+        c[1] = '['
+        c[22] = ']'
+        recordsParser.parse(filePath, verbose, { progress ->
+            for(i in 2 until (progress * 20).toInt() + 2) {
+                c[i] = '.'
+            }
+            print(String(c) + " ${(progress * 100).toInt()}%")
+        }) { record ->
             processRecord(
                 record = record,
-                state = state,
+                result = result,
                 start = start,
                 end = end,
                 centerLongitude = centerLongitude,
@@ -40,12 +50,12 @@ class DaysAbroadCalculator(private val recordsParser: RecordsParser) {
             )
         }
 
-        analyse(state, generateURLsForTransitions)
+        analyse(result, generateURLsForTransitions)
     }
 
     private fun processRecord(
         record: Record,
-        state: State,
+        result: Result,
         start: ZonedDateTime? = null,
         end: ZonedDateTime? = null,
         centerLongitude: Double,
@@ -72,128 +82,210 @@ class DaysAbroadCalculator(private val recordsParser: RecordsParser) {
                 .not()
         ) {
             val dayIndex = record.timestamp.dayIndex()
-            val day = state.dayMap[dayIndex] ?: run {
-                Day(fistTimestamp = record.timestamp, firstLat = record.latitude, firstLon = record.longitude)
-                    .also { state.dayMap[dayIndex] = it }
+            val day = result.dayMap[dayIndex] ?: run {
+                Day(
+                    fistTimestamp = record.timestamp,
+                    firstLat = record.latitude,
+                    firstLon = record.longitude
+                )
+                    .also { result.dayMap[dayIndex] = it }
             }
-            val distance = distanceToCenter(record.longitude, record.latitude, centerLongitude, centerLatitude)
+            val distance =
+                distanceToCenter(record.longitude, record.latitude, centerLongitude, centerLatitude)
 
             if (distance > radius) {
-                day.outsideCount = (day.outsideCount ?: 0) + 1 // outside
+                day.outsideHitCount = (day.outsideHitCount ?: 0) + 1 // outside
+                day.isLastCoordInside = false
             } else {
-                day.insideCount = (day.insideCount ?: 0) + 1 // inside
+                day.insideHitCount = (day.insideHitCount ?: 0) + 1 // inside
+                day.isLastCoordInside = true
             }
             day.lastLat = record.latitude
             day.lastLon = record.longitude
 
-            state.lowestTimestamp =
-                state.lowestTimestamp?.let { if (record.timestamp < it) record.timestamp else it } ?: record.timestamp
-            state.highestTimestamp =
-                state.highestTimestamp?.let { if (record.timestamp > it) record.timestamp else it } ?: record.timestamp
+            result.lowestTimestamp =
+                result.lowestTimestamp?.let { if (record.timestamp < it) record.timestamp else it }
+                    ?: record.timestamp
+            result.highestTimestamp =
+                result.highestTimestamp?.let { if (record.timestamp > it) record.timestamp else it }
+                    ?: record.timestamp
         }
     }
 
     private fun analyse(
-        state: State,
+        result: Result,
         generateURLsForTransitions: Boolean,
     ) {
-        val daysNotInside = state.dayMap.count { it.value.status() in arrayOf(DayStatus.OUTSIDE, DayStatus.TRANSIT) }
-        val sinceFormatted = dateTimeFormatter.format(state.lowestTimestamp)
-        val untilFormatted = dateTimeFormatter.format(state.highestTimestamp)
-        val resultingSize = ChronoUnit.DAYS.between(state.lowestTimestamp, state.highestTimestamp) + 1
+        println("\n\n================= Results =================")
+        printStats(result)
 
-        println("Result range: $sinceFormatted - $untilFormatted ($resultingSize days)")
-        println("Number of days spent outside (including transit days): $daysNotInside")
+        if (generateURLsForTransitions) {
+            printTransitions(result)
+        }
+        val periods = getPeriods(result)
+        printPeriods(periods)
 
-        val (valid, invalid) = state.dayMap.values.partition { it.status() != DayStatus.UNKNOWN }
+        println("\nLast contiguous 365 days inside:")
+        val insideYear = getLastContiguousPeriod(periods, 365, 15)
+        printPeriods(insideYear)
+    }
+
+    private fun printStats(result: Result) {
+        val daysOutside = result.dayMap.count { it.value.isOutside() }
+        val sinceFormatted = dateTimeFormatter.format(result.lowestTimestamp)
+        val untilFormatted = dateTimeFormatter.format(result.highestTimestamp)
+        val resultingSize =
+            ChronoUnit.DAYS.between(result.lowestTimestamp, result.highestTimestamp) + 1
+
+        println("\nResult range: $sinceFormatted - $untilFormatted ($resultingSize days)")
+        println("Number of days spent outside (including transit out days): $daysOutside")
+
+        val (valid, invalid) = result.dayMap.values.partition { it.status() != DayStatus.UNKNOWN }
 
         println("\nQuality of data:")
         println(
             "${valid.size} days have valid coordinates" +
-                    "\nNumber of days that are not captured: ${resultingSize - state.dayMap.size}" +
+                    "\nNumber of days that are not captured: ${resultingSize - result.dayMap.size}" +
                     "\nNumber of days that are captured but do not have enough gps hits: ${invalid.size}"
         )
+    }
 
-        if (generateURLsForTransitions) {
-            if (state.dayMap.values.any { it.status() == DayStatus.TRANSIT }) {
-                println("Transitions:")
-                state.dayMap.keys.forEach {
-                    val day = state.dayMap[it]!!
-                    if (day.status() == DayStatus.TRANSIT) {
-                        val fromURL = "https://www.google.com/maps/@%f,%f,9.25z".format(
-                            convertLatitude(day.firstLat),
-                            convertLongitude(day.firstLon)
-                        )
-                        val toURL = "https://www.google.com/maps/@%f,%f,9.25z".format(
-                            convertLatitude(day.lastLat!!),
-                            convertLongitude(day.lastLon!!)
-                        )
-                        val date = day.fistTimestamp
-                        println("$date, $fromURL -> $toURL (in: ${day.insideCount}, out: ${day.outsideCount})")
-                    }
+    private fun printTransitions(result: Result) {
+        println("\nTransition days:")
+        if (result.dayMap.values.any { it.status() == DayStatus.TRANSIT_IN || it.status() == DayStatus.TRANSIT_OUT }) {
+            result.dayMap.keys.forEach {
+                val day = result.dayMap[it]!!
+                if (day.status() == DayStatus.TRANSIT_IN || day.status() == DayStatus.TRANSIT_OUT) {
+                    val fromURL = "https://www.google.com/maps/place/@%f,%f,15z".format(
+                        convertLatitude(day.firstLat),
+                        convertLongitude(day.firstLon)
+                    )
+                    val toURL = "https://www.google.com/maps/place/@%f,%f,15z".format(
+                        convertLatitude(day.lastLat!!),
+                        convertLongitude(day.lastLon!!)
+                    )
+                    val date = day.fistTimestamp.toLocalDate()
+                    println("\n$date: ${day.insideHitCount} inside, ${day.outsideHitCount} outside\n$fromURL -> $toURL")
                 }
             }
+        } else {
+            println("none")
         }
+    }
+
+    private fun printPeriods(periods: List<Pair<Day, Day>>) {
+        println()
+        periods.forEach {
+            val start = it.first.fistTimestamp
+            val startStr = dateFormatter.format(start)
+            val end = it.second.fistTimestamp
+            val endStr = dateFormatter.format(end)
+            val status = it.first.status().let {
+                when (it) {
+                    DayStatus.TRANSIT_OUT -> DayStatus.OUTSIDE
+                    DayStatus.TRANSIT_IN -> DayStatus.INSIDE
+                    else -> it
+                }
+            }
+            val days = (ChronoUnit.HOURS.between(start, end) / 24.0).roundToInt() + 1
+
+            println("$startStr\t$endStr\t$status\t$days")
+        }
+    }
+
+    private fun getPeriods(result: Result): List<Pair<Day, Day>> {
+        return result.dayMap.values.toList()
+            .sortedBy { it.fistTimestamp }
+            .fold(mutableListOf()) { acc: MutableList<Pair<Day, Day>>, day: Day ->
+                if (acc.isNotEmpty()) {
+                    val finalLastStatus = when (val lastStatus = acc.last().second.status()) {
+                        DayStatus.TRANSIT_IN -> DayStatus.INSIDE
+                        DayStatus.TRANSIT_OUT -> DayStatus.OUTSIDE
+                        else -> lastStatus
+                    }
+                    val finalDayStatus = when (val dayStatus = day.status()) {
+                        DayStatus.TRANSIT_IN -> DayStatus.INSIDE
+                        DayStatus.TRANSIT_OUT -> DayStatus.OUTSIDE
+                        else -> dayStatus
+                    }
+                    if (finalLastStatus == finalDayStatus) {
+                        acc[acc.size - 1] = acc.last().first to day
+                    } else {
+                        acc.add(day to day)
+                    }
+                } else {
+                    acc.add(day to day)
+                }
+                acc
+            }
+    }
+
+    private fun getLastContiguousPeriod(
+        periods: List<Pair<Day, Day>>,
+        days: Int,
+        maxGapDays: Int
+    ): List<Pair<Day, Day>> {
+        val size: (Pair<Day, Day>) -> Int = { (start, end) ->
+            (ChronoUnit.HOURS.between(
+                start.fistTimestamp,
+                end.fistTimestamp
+            ) / 24.0).roundToInt() + 1
+        }
+
+        var done = false
+        return periods.reversed()
+            .fold(mutableListOf()) { acc: MutableList<Pair<Day, Day>>, period ->
+                if (acc.isEmpty()) {
+                    if (period.first.isInside()) {
+                        acc.add(0, period)
+                    }
+                    if (acc.sumOf { size(it) } >= days) {
+                        done = true
+                    }
+                } else if (!done) {
+                    if (period.first.isInside()) {
+                        acc.add(0, period)
+                    } else {
+                        if (size(period) > maxGapDays) {
+                            acc.clear()
+                        } else {
+                            acc.add(0, period)
+                        }
+                    }
+                    if (acc.sumOf { size(it) } >= days) {
+                        done = true
+                    }
+                }
+                acc
+            }
     }
 }
 
-data class State(
+data class Result(
     var lowestTimestamp: ZonedDateTime? = null,
     var highestTimestamp: ZonedDateTime? = null,
     val dayMap: MutableMap<Int, Day> = mutableMapOf(),
-)
-
-private fun processLine(line: String, key: String, value: String, record: Record.Builder): Record.Builder {
-    val value = when (key) {
-        KEY_TIMESTAMP -> line.substring(line.indexOf(':') + 3, line.length - 1)
-        else -> {
-            when {
-                value[0] == '"' -> value.substring(1, value.length - 2)
-                value[value.length - 1] == ',' -> value.substring(0, value.length - 1)
-                else -> value
-            }
-        }
-    }
-
-    return when (key) {
-        KEY_TIMESTAMP -> {
-            if (record.timestamp != null) {
-                println(record)
-                throw IllegalStateException("timestamp expected to be unset")
-            }
-            record.copy(timestamp = ZonedDateTime.parse(value))
-        }
-
-        KEY_LATITUDE -> {
-            if (record.latitude != null) {
-                println(record)
-                throw IllegalStateException("latitude expected to be unset")
-            }
-            record.copy(latitude = value.toLong())
-        }
-
-        KEY_LONGITUDE -> {
-            if (record.longitude != null) {
-                println(record)
-                throw IllegalStateException("longitude expected to be unset")
-            }
-            record.copy(longitude = value.toLong())
-        }
-
-        KEY_ACCURACY -> {
-            if (record.accuracy != null) {
-                println(record)
-                throw IllegalStateException("accuracy expected to be unset")
-            }
-            record.copy(accuracy = value.toLong())
-        }
-
-        else -> record
+) {
+    override fun toString(): String {
+        return "Result(lowestTimestamp=${lowestTimestamp?.format(dateTimeFormatter)}, " +
+                "highestTimestamp=${highestTimestamp?.format(dateTimeFormatter)}, " +
+                "dayMap=$dayMap)"
     }
 }
 
-fun distanceToCenter(longitude: Long, latitude: Long, centerLatitude: Double, centerLongitude: Double): Double {
-    return distance(convertLongitude(longitude), convertLatitude(latitude), centerLongitude, centerLatitude, 'K')
+fun distanceToCenter(
+    longitude: Long,
+    latitude: Long,
+    centerLatitude: Double,
+    centerLongitude: Double
+): Double {
+    return distance(
+        convertLongitude(longitude),
+        convertLatitude(latitude),
+        centerLongitude,
+        centerLatitude,
+        'K'
+    )
 }
 
 private val DEFAULT_START = ZonedDateTime.ofInstant(Instant.EPOCH, ZoneOffset.UTC)

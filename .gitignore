@@ -21,3 +21,4 @@ gradle-app.setting
 /*.zip
 
 /META-INF
+/Records.json

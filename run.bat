@@ -1,1 +1,1 @@
-java -jar DaysAbroad.jar -f Records.json
+java -jar DaysAbroad.jar -f "Records.json" -s 26/06/2015

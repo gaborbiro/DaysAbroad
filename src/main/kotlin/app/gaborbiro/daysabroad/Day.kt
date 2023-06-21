@@ -1,6 +1,7 @@
 package app.gaborbiro.daysabroad
 
 import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 
 class Day(
     val fistTimestamp: ZonedDateTime,
@@ -8,28 +9,32 @@ class Day(
     val firstLon: Long,
     var lastLat: Long? = null,
     var lastLon: Long? = null,
-    var outsideCount: Int? = null,
-    var insideCount: Int? = null
+    var isLastCoordInside: Boolean? = null,
+    var outsideHitCount: Int? = null,
+    var insideHitCount: Int? = null
 ) {
     override fun toString(): String {
-        return "Day(outside=$outsideCount, inside=$insideCount)"
+        return "Day(date=${fistTimestamp.format(dateTimeFormatter)}, out=$outsideHitCount, in=$insideHitCount)"
     }
 
     fun status(): DayStatus {
-        val enoughDaysInside = insideCount != null && insideCount!! > DAY_OUTSIDE_THRESHOLD
-        val enoughDaysOutside = outsideCount != null && outsideCount!! > DAY_OUTSIDE_THRESHOLD
+        val enoughHitsInside = insideHitCount != null && insideHitCount!! > DAY_OUTSIDE_THRESHOLD
+        val enoughHitsOutside = outsideHitCount != null && outsideHitCount!! > DAY_OUTSIDE_THRESHOLD
 
         return when {
-            enoughDaysInside && enoughDaysOutside -> DayStatus.TRANSIT
-            enoughDaysInside -> DayStatus.INSIDE
-            enoughDaysOutside -> DayStatus.OUTSIDE
+            enoughHitsInside && enoughHitsOutside -> if (isLastCoordInside == true) DayStatus.TRANSIT_IN else DayStatus.TRANSIT_OUT
+            enoughHitsInside -> DayStatus.INSIDE
+            enoughHitsOutside -> DayStatus.OUTSIDE
             else -> DayStatus.UNKNOWN
         }
     }
+
+    fun isInside() = status().let { it == DayStatus.INSIDE || it == DayStatus.TRANSIT_IN }
+    fun isOutside() = status().let { it == DayStatus.OUTSIDE || it == DayStatus.TRANSIT_OUT }
 }
 
 private const val DAY_OUTSIDE_THRESHOLD = 25
 
 enum class DayStatus {
-    INSIDE, OUTSIDE, TRANSIT, UNKNOWN
+    INSIDE, OUTSIDE, TRANSIT_IN, TRANSIT_OUT, UNKNOWN
 }

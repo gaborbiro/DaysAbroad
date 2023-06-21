@@ -3,10 +3,12 @@ package app.gaborbiro.daysabroad
 import java.time.ZonedDateTime
 
 interface RecordsParser {
+
     fun parse(
         filePath: String,
         verbose: Boolean,
-        onRecordReady: (Record) -> Unit
+        onProgress: (Float) -> Unit,
+        onRecordReady: (Record) -> Unit,
     )
 }
 
